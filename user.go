@@ -1,7 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
 	"time"
+
+	discordwebhook "github.com/bensch777/discord-webhook-golang"
 )
 
 type UserExtended struct {
@@ -41,9 +49,10 @@ type UserExtended struct {
 	ScoresFirstCount  int `json:"scores_first_count"`
 	ScoresRecentCount int `json:"scores_recent_count"`
 
-	Statistics       *UserStatistics   `json:"statistics"`
-	SupportLevel     int               `json:"support_level"`
-	UserAchievements []UserAchievement `json:"user_achievements"`
+	Statistics         *UserStatistics            `json:"statistics"`
+	StatisticsRulesets *map[string]UserStatistics `json:"statistics_rulesets"`
+	SupportLevel       int                        `json:"support_level"`
+	UserAchievements   []UserAchievement          `json:"user_achievements"`
 }
 
 type AccountHistory struct {
@@ -136,6 +145,10 @@ type UserAchievement struct {
 	AchievedAt    time.Time `json:"achieved_at"`
 }
 
+type UsersResponse struct {
+	Users []UserExtended `json:"users"`
+}
+
 type Update struct {
 	Standard bool
 	Taiko    bool
@@ -152,10 +165,123 @@ type Update struct {
 // 	m: make(map[int]Update),
 // }
 
-func fetchUsers() {
+var userBatcher = NewBatcher(50, time.Minute, fetchUsers)
 
+func updateEmptyUsers() {
+	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go WHERE username = '' ORDER BY added ASC LIMIT 50")
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			log.Fatalln(err)
+			return
+		}
+		userBatcher.Add(id)
+	}
 }
 
-func (u *UserExtended) Create() {
+func fetchUsers(ids []int) {
+	idset := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		idset[id] = struct{}{}
+	}
 
+	body, err := Fetch(fmt.Sprintf("/users?include_variant_statistics=true&ids[]=%s", JoinInts(ids, "&ids[]=")))
+	if err != nil {
+		return
+	}
+
+	var resp UsersResponse
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	for _, user := range resp.Users {
+		if _, ok := idset[user.ID]; !ok {
+			continue
+		}
+
+		wg.Add(1)
+		go func(u UserExtended) {
+			defer wg.Done()
+			u.Update()
+		}(user)
+	}
+	wg.Wait()
+}
+
+func (u *UserExtended) Create() error {
+	_, err := DB.Exec(context.Background(), `
+    INSERT INTO users_go (
+        user_id,
+        username,
+        username_safe,
+        country
+    ) VALUES (
+        $1, $2, $3, $4
+    )
+	`,
+		u.ID,
+		u.Username,
+		u.Safename(),
+		u.CountryCode,
+	)
+
+	return err
+}
+
+func (u *UserExtended) Update() error {
+	_, err := DB.Exec(context.Background(), `
+    UPDATE users_go SET username = $1, username_safe = $2, country = $3 WHERE user_id = $4`,
+		u.Username,
+		u.Safename(),
+		u.CountryCode,
+		u.ID,
+	)
+
+	embed := discordwebhook.Embed{
+		Title:       fmt.Sprintf("%s (%d) is now tracked!", u.Username, u.ID),
+		Description: "Welcome to the community!",
+		Color:       0x86DC3D,
+		Timestamp:   time.Now(),
+		Thumbnail: discordwebhook.Thumbnail{
+			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
+		},
+		Footer: discordwebhook.Footer{
+			Text: fmt.Sprintf("Users tracked: %d", userCount),
+		},
+	}
+
+	hook := discordwebhook.Hook{
+		Username:   "Advance",
+		Avatar_url: "https://a.ppy.sh/9527931",
+		Embeds:     []discordwebhook.Embed{embed},
+	}
+
+	go func(hook discordwebhook.Hook) {
+		webhookQueue <- hook
+	}(hook)
+
+	return err
+}
+
+func (u *UserExtended) Fetch() error {
+	body, err := Fetch(fmt.Sprintf("/users/%d", u.ID))
+	if err != nil {
+		return err
+	}
+
+	return json.Unmarshal(body, &u)
+}
+
+func (u *UserExtended) Safename() string {
+	return strings.ReplaceAll(strings.ToLower(u.Username), " ", "_")
 }

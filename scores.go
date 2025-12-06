@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
-	discordwebhook "github.com/bensch777/discord-webhook-golang"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -86,9 +85,8 @@ func fetchScores() {
 
 	if scores.CursorString != nil {
 		cursor = *scores.CursorString
-		if _, err := cursorFile.WriteString(cursor); err != nil {
+		if err := os.WriteFile("cursor.txt", []byte(cursor), 0644); err != nil {
 			log.Println("Couldn't write cursor to file?", err.Error())
-			return
 		}
 	}
 
@@ -109,25 +107,21 @@ func fetchScores() {
 	for _, score := range scores.Scores {
 		go func(s Score) {
 			defer wg.Done()
+			row := DB.QueryRow(context.Background(), "SELECT 1 FROM users_go WHERE user_id = $1 LIMIT 1", s.UserID)
+
+			var one string
+
+			if err := row.Scan(&one); err != nil {
+				if err != pgx.ErrNoRows {
+					log.Fatalln("Something went wrong selecting inside the Database " + err.Error())
+					return
+				}
+				user := &UserExtended{ID: s.UserID}
+				user.Create()
+			}
+
 			s.Insert()
-
-			embed := discordwebhook.Embed{
-				Title:     "New score",
-				Color:     0x00ff00,
-				Timestamp: time.Now(),
-			}
-
-			hook := discordwebhook.Hook{
-				Username:   "Advance",
-				Avatar_url: fmt.Sprintf("https://a.ppy.sh/%d", s.UserID),
-				Embeds:     []discordwebhook.Embed{embed},
-			}
-
-			if err := SendEmbed(scoreWebhook, hook); err != nil {
-				log.Fatal("cock", err)
-			}
 		}(score)
-		return
 	}
 	wg.Wait()
 }

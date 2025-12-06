@@ -13,32 +13,17 @@ import (
 )
 
 var token *string = nil
-var Limited bool = false
-var Downloads int = 0
-var Beatmaps int = 0
 var tokenMut sync.Mutex
 
 type authToken struct {
 	Token string `json:"token"`
 }
 
-func init() {
-	go func() {
-		for range time.Tick(time.Minute) {
-			Downloads = 0
-		}
-	}()
-}
-
-var Client = &http.Client{
-	Transport: &http.Transport{
-		MaxConnsPerHost:     100,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-	},
-}
+var client = NewLimitedClient(5)
 
 func login() {
+	tokenMut.Lock()
+	defer tokenMut.Unlock()
 	payload := map[string]string{
 		"username": os.Getenv("BANCHO_USERNAME"),
 		"password": os.Getenv("BANCHO_PASSWORD"),
@@ -70,9 +55,11 @@ func login() {
 func Request(url string) (*http.Response, error) {
 	tokenMut.Lock()
 	if token == nil {
+		tokenMut.Unlock()
 		login()
+	} else {
+		tokenMut.Unlock()
 	}
-	tokenMut.Unlock()
 
 	var lastErr error
 
@@ -86,7 +73,7 @@ func Request(url string) (*http.Response, error) {
 		req.Header.Set("User-Agent", "osu-lazer")
 		req.Header.Set("scope", "*")
 
-		resp, err := (Client).Do(req)
+		resp, err := client.Do(req)
 
 		if err != nil {
 			if strings.Contains(err.Error(), "server sent GOAWAY") {
