@@ -227,7 +227,7 @@ func (u *UserExtended) Create() error {
         country
     ) VALUES (
         $1, $2, $3, $4
-    )
+    ) ON CONFLICT (user_id) DO NOTHING
 	`,
 		u.ID,
 		u.Username,
