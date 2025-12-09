@@ -78,6 +78,7 @@ func fetchScores() {
 
 	if err := json.Unmarshal(data, &scores); err != nil {
 		log.Println("Something went wrong while unmarshling")
+		os.WriteFile("error.txt", []byte(err.Error()), 0644)
 		return
 	}
 
@@ -98,8 +99,12 @@ func fetchScores() {
 	for _, score := range scores.Scores {
 		go func(s Score) {
 			defer wg.Done()
-			user := &UserExtended{ID: s.UserID}
-			user.Create()
+			if !userCache.Exists(s.UserID) { //move to create?
+				user := &UserExtended{ID: s.UserID}
+				if err := user.Create(); err == nil {
+					userCache.Add(s.UserID)
+				}
+			}
 
 			s.Insert()
 		}(score)

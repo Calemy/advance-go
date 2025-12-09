@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"time"
 )
 
@@ -20,35 +21,61 @@ func NewBatcher[T any](batchSize int, timeout time.Duration, flushFn func([]T)) 
 	}
 }
 
-func (b *Batcher[T]) Start() {
+func (b *Batcher[T]) Start(cooldown time.Duration) {
+	queue := make([]T, 0)
+	queueMu := sync.Mutex{}
+	queueCond := sync.NewCond(&queueMu)
+
+	go func() {
+		for item := range b.input {
+			queueMu.Lock()
+			queue = append(queue, item)
+			queueCond.Signal()
+			queueMu.Unlock()
+		}
+	}()
+
 	go func() {
 		batch := make([]T, 0, b.batchSize)
 		timer := time.NewTimer(b.timeout)
+		lastFlush := time.Time{}
+
+		flush := func() {
+			now := time.Now()
+			if !lastFlush.IsZero() {
+				if since := now.Sub(lastFlush); since < cooldown {
+					time.Sleep(cooldown - since)
+				}
+			}
+			b.flushFn(batch)
+			lastFlush = time.Now()
+		}
 
 		for {
-			select {
-			case item := <-b.input:
-				batch = append(batch, item)
+			queueMu.Lock()
 
-				if len(batch) >= b.batchSize {
-					b.flushFn(batch)
-					batch = batch[:0]
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					timer.Reset(b.timeout)
-				}
-
-			case <-timer.C:
-				if len(batch) > 0 {
-					b.flushFn(batch)
-					batch = batch[:0]
-				}
-				timer.Reset(b.timeout)
+			for len(queue) == 0 {
+				queueCond.Wait()
 			}
+
+			n := b.batchSize
+			if len(queue) < n {
+				n = len(queue)
+			}
+			batch = append(batch[:0], queue[:n]...)
+			queue = queue[n:]
+
+			queueMu.Unlock()
+
+			flush()
+
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(b.timeout)
 		}
 	}()
 }

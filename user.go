@@ -156,22 +156,79 @@ type Update struct {
 	Mania    bool
 }
 
-// type UserCache struct {
-// 	m  map[int]Update
-// 	mu sync.RWMutex
-// }
+type UserCache struct {
+	m  map[int]struct{}
+	mu sync.RWMutex
+}
 
-// var UserCache = &UserCache{
-// 	m: make(map[int]Update),
-// }
+func (c *UserCache) Add(id int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[id] = struct{}{}
+}
+
+func (c *UserCache) Delete(id int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, id)
+}
+
+func (c *UserCache) Exists(id int) bool {
+	c.mu.RLock()
+	_, exists := c.m[id]
+	c.mu.RUnlock()
+	return exists
+}
+
+var userCache = &UserCache{
+	m: make(map[int]struct{}),
+}
+
+var trackCache = &UserCache{
+	m: make(map[int]struct{}),
+}
 
 var userBatcher = NewBatcher(50, time.Minute, fetchUsers)
+var trackBatcher = NewBatcher(50, time.Minute, fetchUsers)
 
 func updateEmptyUsers() {
 	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go WHERE username = '' ORDER BY added ASC LIMIT 50")
 	if err != nil {
 		return
 	}
+
+	defer rows.Close()
+
+	queued := 0
+
+	for rows.Next() {
+		var id int
+
+		if trackCache.Exists(id) {
+			continue
+		}
+
+		if err := rows.Scan(&id); err != nil {
+			log.Fatalln(err)
+			return
+		}
+
+		trackBatcher.Add(id)
+		trackCache.Add(id)
+		queued++
+	}
+
+	if queued > 0 {
+		log.Printf("Queued %d users to start tracking", queued)
+	}
+}
+
+func updateUsers() {
+	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go WHERE username != '' AND restricted = 0")
+	if err != nil {
+		return
+	}
+	queued := 0
 
 	defer rows.Close()
 
@@ -182,7 +239,10 @@ func updateEmptyUsers() {
 			return
 		}
 		userBatcher.Add(id)
+		queued++
 	}
+
+	log.Printf("Queued %d users for a scheduled update", queued)
 }
 
 func fetchUsers(ids []int) {
@@ -206,6 +266,7 @@ func fetchUsers(ids []int) {
 
 	for _, user := range resp.Users {
 		if _, ok := idset[user.ID]; !ok {
+			user.Restrict()
 			continue
 		}
 
@@ -213,6 +274,15 @@ func fetchUsers(ids []int) {
 		go func(u UserExtended) {
 			defer wg.Done()
 			u.Update()
+			var innerWg sync.WaitGroup
+			innerWg.Add(len(*u.StatisticsRulesets)) //Incase peppy decides to bug out
+			for mode, stats := range *u.StatisticsRulesets {
+				go func(s UserStatistics, mode string) {
+					defer innerWg.Done()
+					s.UpdateHistory(user.ID, ModeInt(mode))
+				}(stats, mode)
+			}
+			innerWg.Wait()
 		}(user)
 	}
 	wg.Wait()
@@ -247,6 +317,10 @@ func (u *UserExtended) Update() error {
 		u.ID,
 	)
 
+	trackCache.Delete(u.ID)
+
+	userCount++
+
 	embed := discordwebhook.Embed{
 		Title:       fmt.Sprintf("%s (%d) is now tracked!", u.Username, u.ID),
 		Description: "Welcome to the community!",
@@ -273,6 +347,134 @@ func (u *UserExtended) Update() error {
 	return err
 }
 
+func (u *UserExtended) Restrict() error {
+	row := DB.QueryRow(context.Background(), `
+    UPDATE users_go SET restricted = 1 WHERE user_id = $1 RETURNING username`,
+		u.ID,
+	)
+
+	userCount--
+
+	err := row.Scan(&u.Username)
+	log.Printf("%s (%d) just got restricted!", u.Username, u.ID)
+
+	embed := discordwebhook.Embed{
+		Title:       fmt.Sprintf("%s (%d) just got restricted!", u.Username, u.ID),
+		Description: "We can only hope they didn't cheat",
+		Color:       0xD2042D,
+		Timestamp:   time.Now(),
+		Thumbnail: discordwebhook.Thumbnail{
+			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
+		},
+		Footer: discordwebhook.Footer{
+			Text: fmt.Sprintf("Users tracked: %d", userCount),
+		},
+	}
+
+	hook := discordwebhook.Hook{
+		Username:   "Advance",
+		Avatar_url: "https://a.ppy.sh/9527931",
+		Embeds:     []discordwebhook.Embed{embed},
+	}
+
+	go func(hook discordwebhook.Hook) {
+		webhookQueue <- hook
+	}(hook)
+
+	return err
+}
+
+func (u *UserStatistics) UpdateHistory(userID int, mode int) error {
+	global := 999999999
+	if u.GlobalRank != nil {
+		global = *u.GlobalRank
+	}
+
+	country := 999999999
+	if u.CountryRank != nil {
+		country = *u.CountryRank
+	}
+
+	_, err := DB.Exec(context.Background(), `
+        MERGE INTO stats_go AS t
+        USING (
+            SELECT
+                $1::int       AS user_id,
+                $13::int      AS mode,
+                $2::int       AS global,
+                $3::int       AS country,
+                $4::float8    AS pp,
+                $5::float8    AS accuracy,
+                $6::int       AS playcount,
+                $7::int       AS playtime,
+                $8::bigint    AS score,
+                $9::bigint    AS hits,
+                $10::int      AS level,
+                $11::int      AS progress,
+                $12::int      AS replays_watched
+        ) AS incoming
+        ON (
+            t.user_id = incoming.user_id
+            AND t.mode = incoming.mode
+            AND t.time >= date_trunc('day', NOW())
+        )
+        WHEN MATCHED AND (
+                incoming.global          IS DISTINCT FROM t.global
+            OR  incoming.country         IS DISTINCT FROM t.country
+            OR  incoming.pp              IS DISTINCT FROM t.pp
+            OR  incoming.accuracy        IS DISTINCT FROM t.accuracy
+            OR  incoming.playcount       IS DISTINCT FROM t.playcount
+            OR  incoming.playtime        IS DISTINCT FROM t.playtime
+            OR  incoming.score           IS DISTINCT FROM t.score
+            OR  incoming.hits            IS DISTINCT FROM t.hits
+            OR  incoming.level           IS DISTINCT FROM t.level
+            OR  incoming.progress        IS DISTINCT FROM t.progress
+            OR  incoming.replays_watched IS DISTINCT FROM t.replays_watched
+        )
+        THEN UPDATE SET
+            global           = incoming.global,
+            country          = incoming.country,
+            pp               = incoming.pp,
+            accuracy         = incoming.accuracy,
+            playcount        = incoming.playcount,
+            playtime         = incoming.playtime,
+            score            = incoming.score,
+            hits             = incoming.hits,
+            level            = incoming.level,
+            progress         = incoming.progress,
+            replays_watched  = incoming.replays_watched,
+            time             = NOW()
+        WHEN NOT MATCHED THEN
+            INSERT (
+                user_id, mode, global, country, pp, accuracy,
+                playcount, playtime, score, hits, level,
+                progress, replays_watched, time
+            ) VALUES (
+                incoming.user_id, incoming.mode,
+                incoming.global, incoming.country, incoming.pp, incoming.accuracy,
+                incoming.playcount, incoming.playtime, incoming.score, incoming.hits, incoming.level,
+                incoming.progress, incoming.replays_watched,
+                NOW()
+            )
+    `,
+		userID,
+		global,
+		country,
+		u.PP,
+		u.HitAccuracy,
+		u.PlayCount,
+		u.PlayTime,
+		u.TotalScore,
+		u.TotalHits,
+		u.Level.Current,
+		u.MaximumCombo,
+		u.ReplaysWatchedByOthers,
+		mode,
+	)
+
+	return err
+}
+
 func (u *UserExtended) Fetch() error {
 	body, err := Fetch(fmt.Sprintf("/users/%d", u.ID))
 	if err != nil {
@@ -284,4 +486,37 @@ func (u *UserExtended) Fetch() error {
 
 func (u *UserExtended) Safename() string {
 	return strings.ReplaceAll(strings.ToLower(u.Username), " ", "_")
+}
+
+func loadUsers() {
+	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go")
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			log.Fatalln(err)
+			return
+		}
+		userCache.Add(id)
+	}
+}
+
+func ModeInt(mode string) int {
+	switch mode {
+	case "osu":
+		return 0
+	case "taiko":
+		return 1
+	case "fruits", "ctb":
+		return 2
+	case "mania":
+		return 3
+	default:
+		return -1 // invalid
+	}
 }

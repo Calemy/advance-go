@@ -21,22 +21,16 @@ func main() {
 	}
 
 	StartWebhookWorker(scoreWebhook)
-	userBatcher.Start()
+	userBatcher.Start(time.Second * 10)  // 6 * 50 Ratelimit -> 300
+	trackBatcher.Start(time.Second * 15) // 4 * 50 Ratelimit -> 200 -> 500
+
+	loadUsers()
 
 	defer DB.Close()
-	if userCount == 0 {
 
-	}
-
-	if usersEdited == 0 {
-
-	}
-
-	if scoreCount == 0 {
-
-	}
-
-	fetchScores()
+	go fetchScores() // 4 * 1 Ratelimit -> 4 -> 504
+	go updateEmptyUsers()
+	go updateUsers()
 
 	wg.Add(2)
 	go func() {
@@ -56,7 +50,7 @@ func main() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			// fetchUsers()
+			updateUsers()
 
 			embed := discordwebhook.Embed{
 				Title:       "Scores collcted",
