@@ -188,6 +188,10 @@ var trackCache = &UserCache{
 	m: make(map[int]struct{}),
 }
 
+var playedCache = &UserCache{
+	m: make(map[int]struct{}),
+}
+
 var userBatcher = NewBatcher(50, time.Minute, fetchUsers)
 var trackBatcher = NewBatcher(50, time.Minute, fetchUsers)
 
@@ -224,31 +228,18 @@ func updateEmptyUsers() {
 }
 
 func updateUsers() {
-	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go WHERE username != '' AND restricted = 0")
-	if err != nil {
-		return
-	}
-	queued := 0
-
-	defer rows.Close()
-
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			log.Fatalln(err)
-			return
-		}
-		userBatcher.Add(id)
-		queued++
+	for user := range playedCache.m {
+		userBatcher.Add(user)
 	}
 
-	log.Printf("Queued %d users for a scheduled update", queued)
+	log.Printf("Queued %d users for a scheduled update", len(playedCache.m))
 }
 
 func fetchUsers(ids []int) {
 	idset := make(map[int]struct{}, len(ids))
 	for _, id := range ids {
 		idset[id] = struct{}{}
+		playedCache.Delete(id)
 	}
 
 	body, err := Fetch(fmt.Sprintf("/users?include_variant_statistics=true&ids[]=%s", JoinInts(ids, "&ids[]=")))
@@ -279,6 +270,10 @@ func fetchUsers(ids []int) {
 			for mode, stats := range *u.StatisticsRulesets {
 				go func(s UserStatistics, mode string) {
 					defer innerWg.Done()
+					if !s.IsRanked || s.PP == 0 {
+						return
+					}
+
 					s.UpdateHistory(user.ID, ModeInt(mode))
 				}(stats, mode)
 			}

@@ -106,6 +106,7 @@ func fetchScores() {
 				}
 			}
 
+			playedCache.Add(s.UserID)
 			s.Insert()
 		}(score)
 	}
