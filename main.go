@@ -30,7 +30,6 @@ func main() {
 
 	go fetchScores() // 4 * 1 Ratelimit -> 4 -> 504
 	go updateEmptyUsers()
-	go updateUsers()
 
 	wg.Add(2)
 	go func() {
@@ -39,8 +38,8 @@ func main() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			fetchScores()
-			updateEmptyUsers()
+			go fetchScores()
+			go updateEmptyUsers()
 		}
 	}()
 
@@ -50,7 +49,7 @@ func main() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			updateUsers()
+			go updateUsers()
 
 			embed := discordwebhook.Embed{
 				Title:       "Scores collcted",
