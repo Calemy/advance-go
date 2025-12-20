@@ -28,8 +28,8 @@ func main() {
 
 	defer DB.Close()
 
-	go fetchScores() // 4 * 1 Ratelimit -> 4 -> 504
-	go updateEmptyUsers()
+	fetchScores() // 4 * 1 Ratelimit -> 4 -> 504
+	updateEmptyUsers()
 
 	wg.Add(2)
 	go func() {
@@ -38,8 +38,8 @@ func main() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			go fetchScores()
-			go updateEmptyUsers()
+			fetchScores()
+			updateEmptyUsers()
 		}
 	}()
 

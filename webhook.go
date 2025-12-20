@@ -14,6 +14,9 @@ var ticker = time.NewTicker(time.Second * 3)
 func StartWebhookWorker(link string) {
 	go func() {
 		for payload := range webhookQueue {
+			if link == "" {
+				continue
+			}
 			<-ticker.C
 			_ = SendEmbed(link, payload)
 		}

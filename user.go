@@ -228,9 +228,11 @@ func updateEmptyUsers() {
 }
 
 func updateUsers() {
+	playedCache.mu.RLock()
 	for user := range playedCache.m {
 		userBatcher.Add(user)
 	}
+	playedCache.mu.RUnlock()
 
 	log.Printf("Queued %d users for a scheduled update", len(playedCache.m))
 }
