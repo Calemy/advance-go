@@ -149,13 +149,6 @@ type UsersResponse struct {
 	Users []UserExtended `json:"users"`
 }
 
-type Update struct {
-	Standard bool
-	Taiko    bool
-	Catch    bool
-	Mania    bool
-}
-
 type UserCache struct {
 	m  map[int]struct{}
 	mu sync.RWMutex
@@ -190,99 +183,6 @@ var trackCache = &UserCache{
 
 var playedCache = &UserCache{
 	m: make(map[int]struct{}),
-}
-
-var userBatcher = NewBatcher(50, time.Minute, fetchUsers)
-var trackBatcher = NewBatcher(50, time.Minute, fetchUsers)
-
-func updateEmptyUsers() {
-	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go WHERE username = '' ORDER BY added ASC LIMIT 50")
-	if err != nil {
-		return
-	}
-
-	defer rows.Close()
-
-	queued := 0
-
-	for rows.Next() {
-		var id int
-
-		if trackCache.Exists(id) {
-			continue
-		}
-
-		if err := rows.Scan(&id); err != nil {
-			log.Fatalln(err)
-			return
-		}
-
-		trackBatcher.Add(id)
-		trackCache.Add(id)
-		queued++
-	}
-
-	if queued > 0 {
-		log.Printf("Queued %d users to start tracking", queued)
-	}
-}
-
-func updateUsers() {
-	playedCache.mu.RLock()
-	for user := range playedCache.m {
-		userBatcher.Add(user)
-	}
-	playedCache.mu.RUnlock()
-
-	log.Printf("Queued %d users for a scheduled update", len(playedCache.m))
-}
-
-func fetchUsers(ids []int) {
-	idset := make(map[int]struct{}, len(ids))
-	for _, id := range ids {
-		idset[id] = struct{}{}
-		playedCache.Delete(id)
-	}
-
-	body, err := Fetch(fmt.Sprintf("/users?include_variant_statistics=true&ids[]=%s", JoinInts(ids, "&ids[]=")))
-	if err != nil {
-		return
-	}
-
-	var resp UsersResponse
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return
-	}
-
-	var wg sync.WaitGroup
-
-	for _, user := range resp.Users {
-		if _, ok := idset[user.ID]; !ok {
-			user.Restrict()
-			continue
-		}
-
-		wg.Add(1)
-		go func(u UserExtended) {
-			defer wg.Done()
-			u.Update()
-			var innerWg sync.WaitGroup
-			innerWg.Add(len(*u.StatisticsRulesets)) //Incase peppy decides to bug out
-			for mode, stats := range *u.StatisticsRulesets {
-				go func(s UserStatistics, mode string) {
-					defer innerWg.Done()
-					if !s.IsRanked || s.PP == 0 {
-						return
-					}
-
-					s.UpdateHistory(user.ID, ModeInt(mode))
-				}(stats, mode)
-			}
-			innerWg.Wait()
-		}(user)
-	}
-	wg.Wait()
 }
 
 func (u *UserExtended) Create() error {
@@ -486,7 +386,7 @@ func (u *UserExtended) Safename() string {
 }
 
 func loadUsers() {
-	rows, err := DB.Query(context.Background(), "SELECT user_id FROM users_go")
+	rows, err := DB.Query(context.Background(), "SELECT user_id, username FROM users_go WHERE restricted = 0")
 	if err != nil {
 		return
 	}
@@ -495,11 +395,15 @@ func loadUsers() {
 
 	for rows.Next() {
 		var id int
-		if err := rows.Scan(&id); err != nil {
+		var username string
+		if err := rows.Scan(&id, &username); err != nil {
 			log.Fatalln(err)
 			return
 		}
 		userCache.Add(id)
+		if username == "" {
+			go updater.Queue(id)
+		}
 	}
 }
 

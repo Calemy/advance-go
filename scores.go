@@ -89,9 +89,10 @@ func fetchScores() {
 	}
 
 	start := time.Now()
+	newUsers := 0
 
 	defer func() {
-		log.Printf("%d scores inserted in %s", len(scores.Scores), time.Since(start))
+		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(updater.list), client.remoteRL.remaining)
 	}()
 
 	if len(scores.Scores) == 0 {
@@ -107,12 +108,13 @@ func fetchScores() {
 			defer wg.Done()
 			if !userCache.Exists(s.UserID) { //move to create?
 				user := &UserExtended{ID: s.UserID}
+				newUsers++
 				if err := user.Create(); err == nil {
 					userCache.Add(s.UserID)
 				}
 			}
 
-			playedCache.Add(s.UserID)
+			go updater.Queue(s.UserID)
 			s.Insert()
 		}(score)
 	}
