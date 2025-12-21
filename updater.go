@@ -13,33 +13,38 @@ type Updater struct {
 	mu   sync.Mutex
 	list map[int]struct{}
 
-	in  chan int   // only take in users in a queue
-	out chan []int // only give out batches
+	priority chan int   // used for empty users and retries
+	in       chan int   // only take in users in a queue
+	out      chan []int // only give out batches
 }
 
 var updater = &Updater{
-	list: make(map[int]struct{}),
-	in:   make(chan int),
-	out:  make(chan []int),
+	list:     make(map[int]struct{}),
+	priority: make(chan int),
+	in:       make(chan int),
+	out:      make(chan []int),
 }
 
-func (u *Updater) Queue(id int) {
+func (u *Updater) Queue(id int, priority bool) {
 	u.mu.Lock()
 	if _, ok := u.list[id]; ok {
 		u.mu.Unlock()
 		return
 	}
-
 	u.list[id] = struct{}{}
 	u.mu.Unlock()
 
-	u.in <- id
+	if priority {
+		u.priority <- id
+	} else {
+		u.in <- id
+	}
 }
 
 func (u *Updater) Remove(id int) {
-	updater.mu.Lock()
-	delete(updater.list, id)
-	updater.mu.Unlock()
+	u.mu.Lock()
+	delete(u.list, id)
+	u.mu.Unlock()
 }
 
 func (u *Updater) Start(timeout, cooldown time.Duration) {
@@ -76,6 +81,13 @@ func (u *Updater) Start(timeout, cooldown time.Duration) {
 			}
 
 			select {
+			case id := <-u.priority:
+				batch = append(batch, id)
+				continue
+			default:
+			}
+
+			select {
 			case id := <-u.in:
 				batch = append(batch, id)
 
@@ -99,7 +111,7 @@ func (u *Updater) worker(id int) {
 			log.Printf("Worker %d failed processing batch: %v", id, err)
 			for _, user := range batch {
 				u.Remove(user)
-				go u.Queue(user)
+				go u.Queue(user, true)
 			}
 			continue
 		}

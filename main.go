@@ -30,7 +30,7 @@ func main() {
 	StartWebhookWorker(scoreWebhook)
 
 	updater.Workers(4)                         // Maximum of 4 workers in parallel taking care of users
-	updater.Start(time.Minute, time.Second*10) // 300 Users/min (Ratelimit already reaches) 4x300 worst case
+	updater.Start(time.Minute, time.Second*10) // 300 Users/min (Ratelimit already reaches) 3x300 worst case
 	loadUsers()
 
 	fetchScores() // 4 * 1 Ratelimit -> 4 -> 604

@@ -90,14 +90,16 @@ func fetchScores() {
 
 	start := time.Now()
 	newUsers := 0
-
-	defer func() {
-		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(updater.list), client.remoteRL.remaining)
-	}()
+	lastTime := time.Now()
 
 	if len(scores.Scores) == 0 {
 		return
 	}
+
+	defer func() {
+		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(updater.list), client.remoteRL.remaining)
+		log.Printf("last scoretime: %s", lastTime.String())
+	}()
 
 	var wg sync.WaitGroup
 
@@ -106,17 +108,20 @@ func fetchScores() {
 	for _, score := range scores.Scores {
 		go func(s Score) {
 			defer wg.Done()
+			priority := false
 			if !userCache.Exists(s.UserID) { //move to create?
 				user := &UserExtended{ID: s.UserID}
-				newUsers++
 				if err := user.Create(); err == nil {
+					newUsers++
 					userCache.Add(s.UserID)
+					priority = true
 				}
 			}
 
-			go updater.Queue(s.UserID)
+			go updater.Queue(s.UserID, priority)
 			s.Insert()
 		}(score)
+		lastTime = score.EndedAt
 	}
 	wg.Wait()
 

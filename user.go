@@ -177,14 +177,6 @@ var userCache = &UserCache{
 	m: make(map[int]struct{}),
 }
 
-var trackCache = &UserCache{
-	m: make(map[int]struct{}),
-}
-
-var playedCache = &UserCache{
-	m: make(map[int]struct{}),
-}
-
 func (u *UserExtended) Create() error {
 	_, err := DB.Exec(context.Background(), `
     INSERT INTO users_go (
@@ -207,14 +199,12 @@ func (u *UserExtended) Create() error {
 
 func (u *UserExtended) Update() error {
 	_, err := DB.Exec(context.Background(), `
-    UPDATE users_go SET username = $1, username_safe = $2, country = $3 WHERE user_id = $4`,
+    UPDATE users_go SET username = $1, username_safe = $2, country = $3, restricted = 0 WHERE user_id = $4`,
 		u.Username,
 		u.Safename(),
 		u.CountryCode,
 		u.ID,
 	)
-
-	trackCache.Delete(u.ID)
 
 	userCount++
 
@@ -386,7 +376,7 @@ func (u *UserExtended) Safename() string {
 }
 
 func loadUsers() {
-	rows, err := DB.Query(context.Background(), "SELECT user_id, username FROM users_go WHERE restricted = 0")
+	rows, err := DB.Query(context.Background(), "SELECT user_id, username FROM users_go WHERE restricted = 0 ORDER BY added ASC")
 	if err != nil {
 		return
 	}
@@ -402,7 +392,7 @@ func loadUsers() {
 		}
 		userCache.Add(id)
 		if username == "" {
-			go updater.Queue(id)
+			go updater.Queue(id, true)
 		}
 	}
 }
