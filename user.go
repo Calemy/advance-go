@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -84,8 +85,8 @@ type UserGroup struct {
 }
 
 type MonthlyCount struct {
-	StartDate time.Time `json:"start_date"`
-	Count     int       `json:"count"`
+	StartDate DateOnly `json:"start_date"`
+	Count     int      `json:"count"`
 }
 
 type UserPage struct {
@@ -119,6 +120,23 @@ type UserStatistics struct {
 	IsRanked               bool          `json:"is_ranked"`
 	GradeCounts            GradeCounts   `json:"grade_counts"`
 	Variants               []UserVariant `json:"variants"`
+}
+
+type DateOnly time.Time
+
+func (d *DateOnly) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return err
+	}
+
+	*d = DateOnly(t)
+	return nil
 }
 
 type UserLevel struct {
@@ -206,8 +224,6 @@ func (u *UserExtended) Update() error {
 		u.ID,
 	)
 
-	userCount++
-
 	embed := discordwebhook.Embed{
 		Title:       fmt.Sprintf("%s (%d) is now tracked!", u.Username, u.ID),
 		Description: "Welcome to the community!",
@@ -232,6 +248,38 @@ func (u *UserExtended) Update() error {
 	}(hook)
 
 	return err
+}
+
+func (u *UserExtended) GetRecent(mode string) ([]Score, error) {
+	body, err := Fetch(fmt.Sprintf("/users/%d/scores/recent?mode=%s&include_fails=1&limit=100", u.ID, mode))
+	if err != nil {
+		return nil, err
+	}
+
+	var data []Score
+
+	err = json.Unmarshal(body, &data)
+	return data, err
+}
+
+func (u *UserExtended) UpdateScores(mode string) error {
+	data, err := u.GetRecent(mode)
+	if err != nil {
+		return err
+	}
+
+	if len(data) == 0 {
+		return nil
+	}
+
+	for _, score := range data {
+		if err := score.Insert(); err != nil {
+			return err
+		}
+		scoreCache.Set(score.ID, struct{}{}, time.Until(score.EndedAt.Add(24*time.Hour)))
+		score.Beatmap.Insert(score.Beatmapset)
+	}
+	return nil
 }
 
 func (u *UserExtended) Restrict() error {
@@ -271,7 +319,7 @@ func (u *UserExtended) Restrict() error {
 	return err
 }
 
-func (u *UserStatistics) UpdateHistory(userID int, mode int) error {
+func (u *UserStatistics) UpdateHistory(id int, mode int) error {
 	global := 999999999
 	if u.GlobalRank != nil {
 		global = *u.GlobalRank
@@ -344,7 +392,7 @@ func (u *UserStatistics) UpdateHistory(userID int, mode int) error {
                 NOW()
             )
     `,
-		userID,
+		id,
 		global,
 		country,
 		u.PP,
@@ -362,8 +410,8 @@ func (u *UserStatistics) UpdateHistory(userID int, mode int) error {
 	return err
 }
 
-func (u *UserExtended) Fetch() error {
-	body, err := Fetch(fmt.Sprintf("/users/%d", u.ID))
+func (u *UserExtended) Fetch(mode int) error {
+	body, err := Fetch(fmt.Sprintf("/users/%d?mode=%d", u.ID, mode))
 	if err != nil {
 		return err
 	}
@@ -392,22 +440,49 @@ func loadUsers() {
 		}
 		userCache.Add(id)
 		if username == "" {
-			go updater.Queue(id, true)
+			go userUpdater.Queue(id, 0, true)
+			go userUpdater.Queue(id, 1, true)
+			go userUpdater.Queue(id, 2, true)
+			go userUpdater.Queue(id, 3, true)
 		}
 	}
 }
 
-func ModeInt(mode string) int {
+func updateUser(id int, modes uint8) error {
+	user := UserExtended{ID: id}
+
+	for i := 0; i < 4; i++ {
+		if modes&(1<<i) != 0 {
+			if err := user.Fetch(i); err != nil {
+				if err == ErrNotFound {
+					user.Restrict()
+					return nil
+				}
+				os.WriteFile("date.error", fmt.Appendf(nil, "%d: %s", id, err.Error()), 0644)
+				return err
+			}
+
+			user.UpdateScores(ModeStr(i))
+			user.Statistics.UpdateHistory(id, i)
+			log.Printf("Updated %s (%d) on Mode %d", user.Username, user.ID, i)
+		}
+	}
+
+	user.Update()
+	return nil
+}
+
+func ModeStr(mode int) string {
 	switch mode {
-	case "osu":
-		return 0
-	case "taiko":
-		return 1
-	case "fruits", "ctb":
-		return 2
-	case "mania":
-		return 3
+	case 0:
+		return "osu"
+	case 1:
+		return "taiko"
+	case 2:
+		return "fruits"
+	case 3:
+		return "mania"
 	default:
-		return -1 // invalid
+		return "osu"
 	}
 }

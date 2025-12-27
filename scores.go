@@ -43,6 +43,9 @@ type Score struct { //We are currently using lazer metrics and yet not all of th
 	TotalScore        int             `json:"total_score"`
 	Type              string          `json:"type"`
 	UserID            int             `json:"user_id"`
+
+	Beatmap    *BeatmapExtended `json:"beatmap"`
+	Beatmapset *Beatmapset      `json:"beatmapset"`
 }
 
 type ScoreStatistics struct { //Most of them are currently unused
@@ -64,6 +67,119 @@ type ScoreStatistics struct { //Most of them are currently unused
 	SliderTailHit       int `json:"slider_tail_hit"`
 	LegacyComboIncrease int `json:"legacy_combo_increase"`
 }
+
+type BeatmapExtended struct {
+	ID           int `json:"id"`
+	BeatmapsetID int `json:"beatmapset_id"`
+	UserID       int `json:"user_id"`
+
+	ModeInt int `json:"mode_int"`
+
+	Ranked int `json:"ranked"`
+
+	Version          string  `json:"version"`
+	DifficultyRating float64 `json:"difficulty_rating"`
+
+	TotalLength int `json:"total_length"`
+	HitLength   int `json:"hit_length"`
+
+	Accuracy float64 `json:"accuracy"`
+	AR       float64 `json:"ar"`
+	CS       float64 `json:"cs"`
+	Drain    float64 `json:"drain"`
+
+	BPM *float64 `json:"bpm"`
+
+	Playcount int `json:"playcount"`
+	Passcount int `json:"passcount"`
+
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+func (b *BeatmapExtended) Insert(s *Beatmapset) error {
+	_, err := DB.Exec(context.Background(), `
+		INSERT INTO beatmaps (
+			beatmap_id,
+			beatmapset_id,
+			title,
+			artist,
+			creator,
+			creator_id,
+			version,
+			length,
+			ranked,
+			last_update,
+			added
+		) VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			NOW(),
+			NOW()
+		)
+		ON CONFLICT (beatmap_id) DO UPDATE
+		SET
+			beatmapset_id = EXCLUDED.beatmapset_id,
+			title         = EXCLUDED.title,
+			artist        = EXCLUDED.artist,
+			creator       = EXCLUDED.creator,
+			creator_id    = EXCLUDED.creator_id,
+			version       = EXCLUDED.version,
+			length        = EXCLUDED.length,
+			ranked        = EXCLUDED.ranked,
+			last_update = CASE
+				WHEN (
+					beatmaps.beatmapset_id IS DISTINCT FROM EXCLUDED.beatmapset_id OR
+					beatmaps.title         IS DISTINCT FROM EXCLUDED.title OR
+					beatmaps.artist        IS DISTINCT FROM EXCLUDED.artist OR
+					beatmaps.creator       IS DISTINCT FROM EXCLUDED.creator OR
+					beatmaps.creator_id    IS DISTINCT FROM EXCLUDED.creator_id OR
+					beatmaps.version       IS DISTINCT FROM EXCLUDED.version OR
+					beatmaps.length        IS DISTINCT FROM EXCLUDED.length OR
+					beatmaps.ranked        IS DISTINCT FROM EXCLUDED.ranked
+				)
+				THEN NOW()
+				ELSE beatmaps.last_update
+			END;
+	`,
+		b.ID,
+		s.ID,
+		s.Title,
+		s.Artist,
+		s.Creator,
+		b.UserID,
+		b.Version,
+		b.HitLength,
+		b.Ranked,
+	)
+
+	return err
+}
+
+type Beatmapset struct {
+	ID int `json:"id"`
+
+	Artist  string `json:"artist"`
+	Title   string `json:"title"`
+	Creator string `json:"creator"`
+
+	Status string `json:"status"`
+
+	UserID int `json:"user_id"`
+}
+
+const (
+	ModeStd   uint8 = iota // 0
+	ModeTaiko              // 1
+	ModeCatch              // 2
+	ModeMania              // 3
+)
 
 func fetchScores() {
 	data, err := Fetch("/scores?cursor_string=" + cursor)
@@ -97,7 +213,7 @@ func fetchScores() {
 	}
 
 	defer func() {
-		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(updater.list), client.remoteRL.remaining)
+		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(userUpdater.cache), client.remoteRL.remaining)
 		log.Printf("last scoretime: %s", lastTime.String())
 	}()
 
@@ -118,7 +234,8 @@ func fetchScores() {
 				}
 			}
 
-			go updater.Queue(s.UserID, priority)
+			// go updater.Queue(s.UserID, priority)
+			go userUpdater.Queue(s.UserID, uint8(s.RulesetID), priority)
 			s.Insert()
 		}(score)
 		lastTime = score.EndedAt
@@ -133,7 +250,10 @@ func fetchScores() {
 	}
 }
 
-func (s *Score) Insert() {
+func (s *Score) Insert() error {
+	if _, exists := scoreCache.Get(s.ID); exists {
+		return nil
+	}
 	if _, err := DB.Exec(context.Background(), `
 		INSERT INTO scores_go (
 			user_id,
@@ -181,8 +301,9 @@ func (s *Score) Insert() {
 		time.Now(),
 	); err != nil {
 		log.Println("Something went wrong inserting score", err)
-		return
+		return err
 	}
 
 	scoreCount++
+	return nil
 }

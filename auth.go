@@ -19,7 +19,7 @@ type authToken struct {
 	Token string `json:"token"`
 }
 
-var client = NewLimitedClient(5)
+var client = NewLimitedClient(17, true)
 
 func login() {
 	tokenMut.Lock()
@@ -72,6 +72,7 @@ func Request(url string) (*http.Response, error) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *token))
 		req.Header.Set("User-Agent", "osu-lazer")
 		req.Header.Set("scope", "*")
+		req.Header.Set("x-api-version", "20220705")
 
 		resp, err := client.Do(req)
 

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -15,19 +18,36 @@ type Client struct {
 	localLimit *rate.Limiter
 	remoteRL   *RemoteRL
 	maxLimit   int
+	inflight   chan struct{}
 }
 
-func NewLimitedClient(rps int) *Client {
+func NewLimitedClient(rps int, enableProxy bool) *Client {
+	initProxies()
+
+	var transport *http.Transport
+
+	if enableProxy && len(proxy.proxies) != 0 {
+		transport = &http.Transport{
+			Proxy:             proxy.NextProxy,
+			DisableKeepAlives: true,
+		}
+	}
 	return &Client{
 		http: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout:   15 * time.Second,
+			Transport: transport,
 		},
+
 		localLimit: rate.NewLimiter(rate.Limit(rps), rps),
 		remoteRL:   NewRemoteRL(),
+		inflight:   make(chan struct{}, 20),
 	}
+
 }
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	c.inflight <- struct{}{}
+	defer func() { <-c.inflight }()
 	c.remoteRL.Check()
 
 	if err := c.localLimit.Wait(req.Context()); err != nil {
@@ -36,6 +56,12 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		f, _ := os.OpenFile("error.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		w := bufio.NewWriter(f)
+		w.WriteString("hello world\n")
+
+		w.Flush()
+		f.Close()
 		return nil, err
 	}
 
@@ -43,6 +69,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 	if resp.StatusCode == 429 {
 		c.remoteRL.TriggerFixed(time.Hour)
+		log.Printf("Received 429, waiting for 1 hour")
 		return nil, errors.New("remote rate limit reached (429)")
 	}
 
@@ -66,26 +93,22 @@ func NewRemoteRL() *RemoteRL {
 
 func (rl *RemoteRL) Check() {
 	rl.mu.Lock()
+	defer rl.mu.Unlock()
 
-	// If another goroutine hit remote RL, we wait here
-	for rl.waiting {
-		rl.cond.Wait()
-	}
-
-	// Fallback: woke too early
-	now := time.Now()
-	if now.Before(rl.waitUntil) {
-		sleep := rl.waitUntil.Sub(now)
-		rl.mu.Unlock()
-		time.Sleep(sleep)
+	if !rl.waiting {
 		return
 	}
 
-	rl.mu.Unlock()
+	rl.cond.Wait()
 }
 
 func (rl *RemoteRL) TriggerFixed(d time.Duration) {
 	rl.mu.Lock()
+
+	if rl.waiting {
+		rl.mu.Unlock()
+		return
+	}
 
 	// Cancel any previous timer
 	if rl.timer != nil {
@@ -111,6 +134,7 @@ func (rl *RemoteRL) TriggerFixed(d time.Duration) {
 func (c *Client) UpdateLimit(resp *http.Response) {
 	limitStr := resp.Header.Get("X-RateLimit-Limit")
 	remainStr := resp.Header.Get("X-RateLimit-Remaining")
+	// resetStr := resp.Header.Get("X-Ratelimit-Reset")
 
 	if limitStr == "" || remainStr == "" {
 		return
@@ -128,6 +152,10 @@ func (c *Client) UpdateLimit(resp *http.Response) {
 
 	if c.maxLimit == 0 {
 		c.maxLimit = limit
+	}
+
+	if remain > c.maxLimit {
+		c.maxLimit = remain
 	}
 
 	rl := c.remoteRL
