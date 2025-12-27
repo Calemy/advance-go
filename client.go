@@ -58,7 +58,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		f, _ := os.OpenFile("error.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		w := bufio.NewWriter(f)
-		w.WriteString("hello world\n")
+		w.WriteString(err.Error())
 
 		w.Flush()
 		f.Close()
