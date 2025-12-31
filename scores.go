@@ -255,7 +255,7 @@ func (s *Score) Insert() error {
 		return nil
 	}
 	if _, err := DB.Exec(context.Background(), `
-		INSERT INTO scores_go (
+		INSERT INTO scores (
 			user_id,
 			beatmap,
 			score_id,
