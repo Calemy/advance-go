@@ -16,22 +16,23 @@ var token *string = nil
 var tokenMut sync.Mutex
 
 type authToken struct {
-	Token string `json:"token"`
+	Token     string `json:"access_token"`
+	ExpiresIn int    `json:"expires_in"`
 }
 
-var client = NewLimitedClient(17, true)
+var client *Client
 
 func login() {
 	tokenMut.Lock()
 	defer tokenMut.Unlock()
 	payload := map[string]string{
-		"username": os.Getenv("BANCHO_USERNAME"),
-		"password": os.Getenv("BANCHO_PASSWORD"),
+		"client_id":     os.Getenv("CLIENT_ID"),
+		"client_secret": os.Getenv("CLIENT_SECRET"),
 	}
 
 	details, _ := json.Marshal(payload)
 
-	resp, err := http.Post("https://auth.catboy.best/login", "application/json", bytes.NewBuffer(details))
+	resp, err := http.Post("https://auth.catboy.best/token", "application/json", bytes.NewBuffer(details))
 
 	if err != nil {
 		panic("Authentication not reachable.") //Please for the love of god implement a fallback
@@ -70,8 +71,6 @@ func Request(url string) (*http.Response, error) {
 		}
 
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *token))
-		req.Header.Set("User-Agent", "osu-lazer")
-		req.Header.Set("scope", "*")
 		req.Header.Set("x-api-version", "20220705")
 
 		resp, err := client.Do(req)
