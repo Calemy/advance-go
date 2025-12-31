@@ -21,17 +21,18 @@ type Client struct {
 	inflight   chan struct{}
 }
 
-func NewLimitedClient(rps int, enableProxy bool) *Client {
+func NewLimitedClient(rps int) *Client {
 	initProxies()
 
 	var transport *http.Transport
 
-	if enableProxy && len(proxy.proxies) != 0 {
+	if os.Getenv("ENABLE_PROXY") == "true" && len(proxy.proxies) != 0 {
 		transport = &http.Transport{
 			Proxy:             proxy.NextProxy,
 			DisableKeepAlives: true,
 		}
 	}
+
 	return &Client{
 		http: &http.Client{
 			Timeout:   15 * time.Second,
@@ -58,7 +59,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		f, _ := os.OpenFile("error.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		w := bufio.NewWriter(f)
-		w.WriteString(err.Error())
+		w.WriteString(err.Error() + "\n")
 
 		w.Flush()
 		f.Close()

@@ -39,21 +39,25 @@ func (r *ProxyRotator) NextProxy(_ *http.Request) (*url.URL, error) {
 
 func initProxies() {
 	proxies := make([]string, 0)
-	file, err := os.OpenFile("proxy.txt", os.O_CREATE|os.O_RDONLY, 0600)
+
+	if os.Getenv("ENABLE_PROXY") == "true" {
+		file, err := os.OpenFile("proxy.txt", os.O_CREATE|os.O_RDONLY, 0600)
+		if err != nil {
+			panic(err)
+		}
+
+		scanner := bufio.NewScanner(file)
+
+		for scanner.Scan() {
+			proxies = append(proxies, scanner.Text())
+		}
+
+		log.Printf("Successfully registered %d proxies", len(proxies))
+	}
+
+	rotator, err := NewProxyRotator(proxies)
 	if err != nil {
 		panic(err)
 	}
-
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		proxies = append(proxies, scanner.Text())
-	}
-
-	log.Printf("Successfully registered %d proxies", len(proxies))
-
-	proxy, err = NewProxyRotator(proxies)
-	if err != nil {
-		panic(err)
-	}
+	proxy = rotator
 }
