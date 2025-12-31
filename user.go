@@ -197,7 +197,7 @@ var userCache = &UserCache{
 
 func (u *UserExtended) Create() error {
 	_, err := DB.Exec(context.Background(), `
-    INSERT INTO users_go (
+    INSERT INTO users (
         user_id,
         username,
         username_safe,
@@ -217,7 +217,7 @@ func (u *UserExtended) Create() error {
 
 func (u *UserExtended) Update() error {
 	_, err := DB.Exec(context.Background(), `
-    UPDATE users_go SET username = $1, username_safe = $2, country = $3, restricted = 0 WHERE user_id = $4`,
+    UPDATE users SET username = $1, username_safe = $2, country = $3, restricted = 0 WHERE user_id = $4`,
 		u.Username,
 		u.Safename(),
 		u.CountryCode,
@@ -284,7 +284,7 @@ func (u *UserExtended) UpdateScores(mode string) error {
 
 func (u *UserExtended) Restrict() error {
 	row := DB.QueryRow(context.Background(), `
-    UPDATE users_go SET restricted = 1 WHERE user_id = $1 RETURNING username`,
+    UPDATE users SET restricted = 1 WHERE user_id = $1 RETURNING username`,
 		u.ID,
 	)
 
@@ -331,68 +331,44 @@ func (u *UserStatistics) UpdateHistory(id int, mode int) error {
 	}
 
 	_, err := DB.Exec(context.Background(), `
-        MERGE INTO stats_go AS t
-        USING (
-            SELECT
-                $1::int       AS user_id,
-                $13::int      AS mode,
-                $2::int       AS global,
-                $3::int       AS country,
-                $4::float8    AS pp,
-                $5::float8    AS accuracy,
-                $6::int       AS playcount,
-                $7::int       AS playtime,
-                $8::bigint    AS score,
-                $9::bigint    AS hits,
-                $10::int      AS level,
-                $11::int      AS progress,
-                $12::int      AS replays_watched
-        ) AS incoming
-        ON (
-            t.user_id = incoming.user_id
-            AND t.mode = incoming.mode
-            AND t.time >= date_trunc('day', NOW())
-        )
-        WHEN MATCHED AND (
-                incoming.global          IS DISTINCT FROM t.global
-            OR  incoming.country         IS DISTINCT FROM t.country
-            OR  incoming.pp              IS DISTINCT FROM t.pp
-            OR  incoming.accuracy        IS DISTINCT FROM t.accuracy
-            OR  incoming.playcount       IS DISTINCT FROM t.playcount
-            OR  incoming.playtime        IS DISTINCT FROM t.playtime
-            OR  incoming.score           IS DISTINCT FROM t.score
-            OR  incoming.hits            IS DISTINCT FROM t.hits
-            OR  incoming.level           IS DISTINCT FROM t.level
-            OR  incoming.progress        IS DISTINCT FROM t.progress
-            OR  incoming.replays_watched IS DISTINCT FROM t.replays_watched
-        )
-        THEN UPDATE SET
-            global           = incoming.global,
-            country          = incoming.country,
-            pp               = incoming.pp,
-            accuracy         = incoming.accuracy,
-            playcount        = incoming.playcount,
-            playtime         = incoming.playtime,
-            score            = incoming.score,
-            hits             = incoming.hits,
-            level            = incoming.level,
-            progress         = incoming.progress,
-            replays_watched  = incoming.replays_watched,
-            time             = NOW()
-        WHEN NOT MATCHED THEN
-            INSERT (
-                user_id, mode, global, country, pp, accuracy,
-                playcount, playtime, score, hits, level,
-                progress, replays_watched, time
-            ) VALUES (
-                incoming.user_id, incoming.mode,
-                incoming.global, incoming.country, incoming.pp, incoming.accuracy,
-                incoming.playcount, incoming.playtime, incoming.score, incoming.hits, incoming.level,
-                incoming.progress, incoming.replays_watched,
-                NOW()
-            )
+	INSERT INTO stats (
+		user_id, mode, global, country, pp, accuracy,
+		playcount, playtime, score, hits, level,
+		progress, replays_watched
+	)
+	VALUES (
+		$1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11,
+        $12, $13
+	)
+	ON CONFLICT (user_id, mode, day)
+	DO UPDATE SET
+		global           = EXCLUDED.global,
+		country          = EXCLUDED.country,
+		pp               = EXCLUDED.pp,
+		accuracy         = EXCLUDED.accuracy,
+		playcount        = EXCLUDED.playcount,
+		playtime         = EXCLUDED.playtime,
+		score            = EXCLUDED.score,
+		hits             = EXCLUDED.hits,
+		level            = EXCLUDED.level,
+		progress         = EXCLUDED.progress,
+		replays_watched  = EXCLUDED.replays_watched,
+	WHERE
+			stats.global          IS DISTINCT FROM EXCLUDED.global
+		OR  stats.country         IS DISTINCT FROM EXCLUDED.country
+		OR  stats.pp              IS DISTINCT FROM EXCLUDED.pp
+		OR  stats.accuracy        IS DISTINCT FROM EXCLUDED.accuracy
+		OR  stats.playcount       IS DISTINCT FROM EXCLUDED.playcount
+		OR  stats.playtime        IS DISTINCT FROM EXCLUDED.playtime
+		OR  stats.score           IS DISTINCT FROM EXCLUDED.score
+		OR  stats.hits            IS DISTINCT FROM EXCLUDED.hits
+		OR  stats.level           IS DISTINCT FROM EXCLUDED.level
+		OR  stats.progress        IS DISTINCT FROM EXCLUDED.progress
+		OR  stats.replays_watched IS DISTINCT FROM EXCLUDED.replays_watched;
     `,
 		id,
+		mode,
 		global,
 		country,
 		u.PP,
@@ -404,7 +380,38 @@ func (u *UserStatistics) UpdateHistory(id int, mode int) error {
 		u.Level.Current,
 		u.MaximumCombo,
 		u.ReplaysWatchedByOthers,
-		mode,
+	)
+
+	return err
+}
+
+func (u *UserExtended) UpdateBase() error {
+	_, err := DB.Exec(context.Background(), `
+	INSERT INTO stats_base (
+		user_id,
+		badges,
+		followers,
+		achievements
+	)
+	VALUES (
+		$1, $2, $3, $4
+	)
+	ON CONFLICT (user_id, day)
+	DO UPDATE SET
+		badges        = EXCLUDED.badges,
+		banners       = EXCLUDED.banners,
+		followers     = EXCLUDED.followers,
+		achievements  = EXCLUDED.achievements,
+	WHERE
+			stats_base.badges       IS DISTINCT FROM EXCLUDED.badges
+		OR  stats_base.banners      IS DISTINCT FROM EXCLUDED.banners
+		OR  stats_base.followers    IS DISTINCT FROM EXCLUDED.followers
+		OR  stats_base.achievements IS DISTINCT FROM EXCLUDED.achievements;
+    `,
+		u.ID,
+		len(u.Badges),
+		u.FollowerCount,
+		len(u.UserAchievements),
 	)
 
 	return err
@@ -424,27 +431,58 @@ func (u *UserExtended) Safename() string {
 }
 
 func loadUsers() {
-	rows, err := DB.Query(context.Background(), "SELECT user_id, username FROM users_go WHERE restricted = 0 ORDER BY added ASC")
+	rows, err := DB.Query(context.Background(),
+		"SELECT user_id FROM users WHERE restricted = 0;",
+	)
 	if err != nil {
 		return
 	}
-
 	defer rows.Close()
 
 	for rows.Next() {
 		var id int
-		var username string
-		if err := rows.Scan(&id, &username); err != nil {
-			log.Fatalln(err)
+		if err := rows.Scan(&id); err != nil {
 			return
 		}
 		userCache.Add(id)
-		if username == "" {
-			go userUpdater.Queue(id, 0, true)
-			go userUpdater.Queue(id, 1, true)
-			go userUpdater.Queue(id, 2, true)
-			go userUpdater.Queue(id, 3, true)
+	}
+}
+
+func loadQueue() {
+	rows, err := DB.Query(context.Background(), `
+	SELECT
+		t.user_id,
+		t.mode
+	FROM (
+		SELECT DISTINCT ON (s.user_id, s.mode)
+			s.user_id,
+			s.mode,
+			s.time
+		FROM scores s
+		JOIN users u ON u.user_id = s.user_id
+		WHERE u.restricted = 0
+		AND (
+				u.last_updated IS NULL
+				OR s.time > u.last_updated
+		)
+		ORDER BY
+			s.user_id,
+			s.mode,
+			s.time ASC
+	) t
+	ORDER BY t.time ASC;
+    `)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, mode int
+		if err := rows.Scan(&id, &mode); err != nil {
+			return
 		}
+		go userUpdater.Queue(id, uint8(mode), true)
 	}
 }
 
@@ -469,6 +507,7 @@ func updateUser(id int, modes uint8) error {
 	}
 
 	user.Update()
+	user.UpdateBase()
 	return nil
 }
 

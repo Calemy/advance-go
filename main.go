@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +16,17 @@ var scoreWebhook string
 
 func main() {
 	var wg sync.WaitGroup
+
+	rpsStr := os.Getenv("REQUESTS_PER_SECOND")
+	rps := 5
+	if rpsStr != "" {
+		parsed, err := strconv.Atoi(rpsStr)
+		if err == nil && parsed != 0 {
+			rps = parsed
+		}
+	}
+
+	client = NewLimitedClient(rps)
 
 	InitDB(os.Getenv("POSTGRES_URL"))
 	defer DB.Close()
@@ -33,6 +45,7 @@ func main() {
 	userUpdater.Start()
 
 	loadUsers()
+	loadQueue()
 
 	fetchScores() // 4 * 1 Ratelimit -> 4 -> 604
 
