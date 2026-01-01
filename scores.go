@@ -234,7 +234,6 @@ func fetchScores() {
 				}
 			}
 
-			// go updater.Queue(s.UserID, priority)
 			go userUpdater.Queue(s.UserID, uint8(s.RulesetID), priority)
 			s.Insert()
 		}(score)

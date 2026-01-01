@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	discordwebhook "github.com/bensch777/discord-webhook-golang"
@@ -353,7 +354,7 @@ func (u *UserStatistics) UpdateHistory(id int, mode int) error {
 		hits             = EXCLUDED.hits,
 		level            = EXCLUDED.level,
 		progress         = EXCLUDED.progress,
-		replays_watched  = EXCLUDED.replays_watched,
+		replays_watched  = EXCLUDED.replays_watched
 	WHERE
 			stats.global          IS DISTINCT FROM EXCLUDED.global
 		OR  stats.country         IS DISTINCT FROM EXCLUDED.country
@@ -401,7 +402,7 @@ func (u *UserExtended) UpdateBase() error {
 		badges        = EXCLUDED.badges,
 		banners       = EXCLUDED.banners,
 		followers     = EXCLUDED.followers,
-		achievements  = EXCLUDED.achievements,
+		achievements  = EXCLUDED.achievements
 	WHERE
 			stats_base.badges       IS DISTINCT FROM EXCLUDED.badges
 		OR  stats_base.banners      IS DISTINCT FROM EXCLUDED.banners
@@ -435,8 +436,9 @@ func loadUsers() {
 		"SELECT user_id FROM users WHERE restricted = 0;",
 	)
 	if err != nil {
-		return
+		panic(err)
 	}
+
 	defer rows.Close()
 
 	for rows.Next() {
@@ -461,10 +463,7 @@ func loadQueue() {
 		FROM scores s
 		JOIN users u ON u.user_id = s.user_id
 		WHERE u.restricted = 0
-		AND (
-				u.last_updated IS NULL
-				OR s.time > u.last_updated
-		)
+		AND s.time > u.last_update
 		ORDER BY
 			s.user_id,
 			s.mode,
@@ -473,17 +472,23 @@ func loadQueue() {
 	ORDER BY t.time ASC;
     `)
 	if err != nil {
-		return
+		panic(err)
 	}
+
 	defer rows.Close()
+
+	var c atomic.Int64
 
 	for rows.Next() {
 		var id, mode int
 		if err := rows.Scan(&id, &mode); err != nil {
 			return
 		}
+		c.Add(1)
 		go userUpdater.Queue(id, uint8(mode), true)
 	}
+
+	fmt.Printf("Queued %d updates\n", c.Load())
 }
 
 func updateUser(id int, modes uint8) error {
