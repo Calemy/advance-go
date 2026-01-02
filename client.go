@@ -24,19 +24,9 @@ type Client struct {
 func NewLimitedClient(rps int) *Client {
 	initProxies()
 
-	var transport *http.Transport
-
-	if os.Getenv("ENABLE_PROXY") == "true" && len(proxy.proxies) != 0 {
-		transport = &http.Transport{
-			Proxy:             proxy.NextProxy,
-			DisableKeepAlives: true,
-		}
-	}
-
-	return &Client{
+	cli := &Client{
 		http: &http.Client{
-			Timeout:   15 * time.Second,
-			Transport: transport,
+			Timeout: 15 * time.Second,
 		},
 
 		localLimit: rate.NewLimiter(rate.Limit(rps), rps),
@@ -44,6 +34,14 @@ func NewLimitedClient(rps int) *Client {
 		inflight:   make(chan struct{}, 20),
 	}
 
+	if os.Getenv("ENABLE_PROXY") == "true" && len(proxy.proxies) != 0 {
+		cli.http.Transport = &http.Transport{
+			Proxy:             proxy.NextProxy,
+			DisableKeepAlives: true,
+		}
+	}
+
+	return cli
 }
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
