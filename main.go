@@ -13,6 +13,7 @@ import (
 )
 
 var scoreWebhook string
+var includeFailed = 0
 
 func main() {
 	var wg sync.WaitGroup
@@ -24,6 +25,10 @@ func main() {
 		if err == nil && parsed != 0 {
 			rps = parsed
 		}
+	}
+
+	if os.Getenv("INCLUDE_FAILED") == "true" {
+		includeFailed = 1
 	}
 
 	client = NewLimitedClient(rps)

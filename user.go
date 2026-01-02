@@ -252,7 +252,7 @@ func (u *UserExtended) Update() error {
 }
 
 func (u *UserExtended) GetRecent(mode string) ([]Score, error) {
-	body, err := Fetch(fmt.Sprintf("/users/%d/scores/recent?mode=%s&include_fails=1&limit=100", u.ID, mode))
+	body, err := Fetch(fmt.Sprintf("/users/%d/scores/recent?mode=%s&include_fails=%d&limit=100", u.ID, mode, includeFailed))
 	if err != nil {
 		return nil, err
 	}
