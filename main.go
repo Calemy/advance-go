@@ -14,8 +14,9 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 )
 
-var statsWebhook string
 var includeFailed = 0
+var statsHook = NewWebhookWorker(os.Getenv("STATS_WEBHOOK"))
+var restrictHook = NewWebhookWorker(os.Getenv("RESTRICTED_WEBHOOK"))
 
 func main() {
 	var wg sync.WaitGroup
@@ -43,10 +44,13 @@ func main() {
 		http.ListenAndServe("localhost:6060", nil)
 	}()
 
-	if os.Getenv("ENABLE_WEBHOOK") == "true" {
-		statsWebhook = os.Getenv("STATS_WEBHOOK")
+	if os.Getenv("ENABLE_WEBHOOK") != "true" {
+		statsHook.Link = ""
+		restrictHook.Link = ""
 	}
-	StartWebhookWorker(statsWebhook)
+
+	statsHook.Start()
+	restrictHook.Start()
 
 	userUpdater.Workers(20)
 	userUpdater.Start()
@@ -76,9 +80,9 @@ func main() {
 
 		for {
 			embed := discordwebhook.Embed{
-				Title:       "Update Stats",
-				Color:       0x86DC3D,
-				Timestamp:   time.Now(),
+				Title:     "Update Stats",
+				Color:     0x86DC3D,
+				Timestamp: time.Now(),
 				Footer: discordwebhook.Footer{
 					Text: fmt.Sprintf("Users tracked: %d", userCount),
 				},
@@ -100,7 +104,7 @@ func main() {
 				Avatar_url: "https://a.ppy.sh/9527931",
 				Embeds:     []discordwebhook.Embed{embed},
 			}
-			webhookQueue <- hook
+			statsHook.Queue(hook)
 			scoreCount = 0
 			statsCount = 0
 			<-ticker.C

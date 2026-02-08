@@ -8,19 +8,31 @@ import (
 	discordwebhook "github.com/bensch777/discord-webhook-golang"
 )
 
-var webhookQueue = make(chan discordwebhook.Hook)
-var ticker = time.NewTicker(time.Second * 3)
+type WebhookWorker struct {
+	Link   string
+	queue  chan discordwebhook.Hook
+	Ticker *time.Ticker
+}
 
-func StartWebhookWorker(link string) {
+func NewWebhookWorker(link string) *WebhookWorker {
+	return &WebhookWorker{
+		Link:   link,
+		queue:  make(chan discordwebhook.Hook),
+		Ticker: time.NewTicker(time.Second * 3),
+	}
+}
+
+func (w *WebhookWorker) Start() {
 	go func() {
-		for payload := range webhookQueue {
-			if link == "" {
-				continue
-			}
-			<-ticker.C
-			_ = SendEmbed(link, payload)
+		for payload := range w.queue {
+			<-w.Ticker.C
+			_ = SendEmbed(w.Link, payload)
 		}
 	}()
+}
+
+func (w *WebhookWorker) Queue(hook discordwebhook.Hook) {
+	w.queue <- hook
 }
 
 func SendEmbed(link string, hook discordwebhook.Hook) error {

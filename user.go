@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	discordwebhook "github.com/bensch777/discord-webhook-golang"
 )
 
 type UserExtended struct {
@@ -268,6 +270,27 @@ func (u *UserExtended) Restrict() error {
 
 	err := row.Scan(&u.Username)
 	log.Printf("%s (%d) just got restricted!", u.Username, u.ID)
+
+	embed := discordwebhook.Embed{
+		Title:       fmt.Sprintf("%s (%d) just got restricted!", u.Username, u.ID),
+		Description: "We can only hope they didn't cheat",
+		Color:       0xD2042D,
+		Timestamp:   time.Now(),
+		Thumbnail: discordwebhook.Thumbnail{
+			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
+		},
+		Footer: discordwebhook.Footer{
+			Text: fmt.Sprintf("Users tracked: %d", userCount),
+		},
+	}
+
+	hook := discordwebhook.Hook{
+		Username:   "Advance",
+		Avatar_url: "https://a.ppy.sh/9527931",
+		Embeds:     []discordwebhook.Embed{embed},
+	}
+
+	restrictHook.Queue(hook)
 
 	return err
 }
