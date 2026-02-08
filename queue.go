@@ -70,7 +70,10 @@ func (q *Queue) worker() {
 			q.mu.Lock()
 			q.cache[id] |= modes
 			q.mu.Unlock()
-			q.priority <- id
+
+			go func() {
+				q.priority <- id
+			}()
 		}
 	}
 }
