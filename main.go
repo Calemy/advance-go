@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -9,10 +10,11 @@ import (
 
 	_ "net/http/pprof"
 
+	discordwebhook "github.com/bensch777/discord-webhook-golang"
 	_ "github.com/joho/godotenv/autoload"
 )
 
-var scoreWebhook string
+var statsWebhook string
 var includeFailed = 0
 
 func main() {
@@ -42,9 +44,9 @@ func main() {
 	}()
 
 	if os.Getenv("ENABLE_WEBHOOK") == "true" {
-		scoreWebhook = os.Getenv("SCORES_WEBHOOK")
+		statsWebhook = os.Getenv("STATS_WEBHOOK")
 	}
-	StartWebhookWorker(scoreWebhook)
+	StartWebhookWorker(statsWebhook)
 
 	userUpdater.Workers(20)
 	userUpdater.Start()
@@ -61,6 +63,47 @@ func main() {
 
 		for range ticker.C {
 			fetchScores()
+		}
+	}()
+
+	go func() {
+		now := time.Now()
+		nextHour := now.Truncate(time.Hour).Add(time.Hour)
+		time.Sleep(time.Until(nextHour))
+
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+
+		for {
+			embed := discordwebhook.Embed{
+				Title:       "Update Stats",
+				Color:       0x86DC3D,
+				Timestamp:   time.Now(),
+				Footer: discordwebhook.Footer{
+					Text: fmt.Sprintf("Users tracked: %d", userCount),
+				},
+				Fields: []discordwebhook.Field{
+					{
+						Name:   "Scores Stored",
+						Value:  fmt.Sprintf("%d", scoreCount),
+						Inline: true,
+					},
+					{
+						Name:   "Stats Updated",
+						Value:  fmt.Sprintf("%d", statsCount),
+						Inline: true,
+					},
+				},
+			}
+			hook := discordwebhook.Hook{
+				Username:   "Advance",
+				Avatar_url: "https://a.ppy.sh/9527931",
+				Embeds:     []discordwebhook.Embed{embed},
+			}
+			webhookQueue <- hook
+			scoreCount = 0
+			statsCount = 0
+			<-ticker.C
 		}
 	}()
 

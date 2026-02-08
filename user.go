@@ -10,8 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	discordwebhook "github.com/bensch777/discord-webhook-golang"
 )
 
 type UserExtended struct {
@@ -225,29 +223,6 @@ func (u *UserExtended) Update() error {
 		u.ID,
 	)
 
-	embed := discordwebhook.Embed{
-		Title:       fmt.Sprintf("%s (%d) is now tracked!", u.Username, u.ID),
-		Description: "Welcome to the community!",
-		Color:       0x86DC3D,
-		Timestamp:   time.Now(),
-		Thumbnail: discordwebhook.Thumbnail{
-			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
-		},
-		Footer: discordwebhook.Footer{
-			Text: fmt.Sprintf("Users tracked: %d", userCount),
-		},
-	}
-
-	hook := discordwebhook.Hook{
-		Username:   "Advance",
-		Avatar_url: "https://a.ppy.sh/9527931",
-		Embeds:     []discordwebhook.Embed{embed},
-	}
-
-	go func(hook discordwebhook.Hook) {
-		webhookQueue <- hook
-	}(hook)
-
 	return err
 }
 
@@ -293,29 +268,6 @@ func (u *UserExtended) Restrict() error {
 
 	err := row.Scan(&u.Username)
 	log.Printf("%s (%d) just got restricted!", u.Username, u.ID)
-
-	embed := discordwebhook.Embed{
-		Title:       fmt.Sprintf("%s (%d) just got restricted!", u.Username, u.ID),
-		Description: "We can only hope they didn't cheat",
-		Color:       0xD2042D,
-		Timestamp:   time.Now(),
-		Thumbnail: discordwebhook.Thumbnail{
-			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
-		},
-		Footer: discordwebhook.Footer{
-			Text: fmt.Sprintf("Users tracked: %d", userCount),
-		},
-	}
-
-	hook := discordwebhook.Hook{
-		Username:   "Advance",
-		Avatar_url: "https://a.ppy.sh/9527931",
-		Embeds:     []discordwebhook.Embed{embed},
-	}
-
-	go func(hook discordwebhook.Hook) {
-		webhookQueue <- hook
-	}(hook)
 
 	return err
 }
@@ -447,7 +399,9 @@ func loadUsers() {
 			return
 		}
 		userCache.Add(id)
+		userCount++
 	}
+	log.Printf("Loaded %d users", userCount)
 }
 
 func loadQueue() {
@@ -488,7 +442,7 @@ func loadQueue() {
 		go userUpdater.Queue(id, uint8(mode), true)
 	}
 
-	fmt.Printf("Queued %d updates\n", c.Load())
+	log.Printf("Queued %d updates\n", c.Load())
 }
 
 func updateUser(id int, modes uint8) error {
@@ -510,7 +464,7 @@ func updateUser(id int, modes uint8) error {
 			log.Printf("Updated %s (%d) on Mode %d", user.Username, user.ID, i)
 		}
 	}
-
+	statsCount++
 	user.Update()
 	user.UpdateBase()
 	return nil
