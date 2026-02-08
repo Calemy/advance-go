@@ -213,7 +213,8 @@ func fetchScores() {
 	}
 
 	defer func() {
-		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | update queue: %d | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), len(userUpdater.cache), client.remoteRL.remaining)
+		log.Printf("%d scores inserted in %s | %d new users queued (%d total) | remaining ratelimit: %d", len(scores.Scores), time.Since(start), newUsers, len(userCache.m), client.remoteRL.remaining)
+		log.Printf("Queue: %d | Priority: %d | Total: %d", len(userUpdater.in), len(userUpdater.priority), len(userUpdater.cache))
 		log.Printf("last scoretime: %s", lastTime.String())
 	}()
 
@@ -229,6 +230,7 @@ func fetchScores() {
 				user := &UserExtended{ID: s.UserID}
 				if err := user.Create(); err == nil {
 					newUsers++
+					userCount++
 					userCache.Add(s.UserID)
 					priority = true
 				}
