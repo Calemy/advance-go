@@ -12,6 +12,9 @@ import (
 	"time"
 
 	discordwebhook "github.com/bensch777/discord-webhook-golang"
+	"github.com/jackc/pgx/v5"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 type UserExtended struct {
@@ -271,16 +274,50 @@ func (u *UserExtended) Restrict() error {
 	err := row.Scan(&u.Username)
 	log.Printf("%s (%d) just got restricted!", u.Username, u.ID)
 
+	stats := UserStatistics{}
+
+	err = DB.QueryRow(
+		context.Background(),
+		`
+		SELECT COALESCE(MAX(country), 0), COALESCE(MAX(global), 0), COALESCE(MAX(pp), 0)
+		FROM stats
+		WHERE user_id = $1
+		LIMIT 1
+		`, u.ID,
+	).Scan(&stats.CountryRank, &stats.GlobalRank, &stats.PP)
+
+	if err != nil && err != pgx.ErrNoRows {
+		return err
+	}
+
+	p := message.NewPrinter(language.English)
+
 	embed := discordwebhook.Embed{
-		Title:       fmt.Sprintf("%s (%d) just got restricted!", u.Username, u.ID),
-		Description: "We can only hope they didn't cheat",
-		Color:       0xD2042D,
-		Timestamp:   time.Now(),
+		Title:     fmt.Sprintf("%s (%d) just got restricted!", u.Username, u.ID),
+		Color:     0xD2042D,
+		Timestamp: time.Now(),
 		Thumbnail: discordwebhook.Thumbnail{
 			Url: fmt.Sprintf("https://a.ppy.sh/%d", u.ID),
 		},
 		Footer: discordwebhook.Footer{
 			Text: fmt.Sprintf("Users tracked: %d", userCount),
+		},
+		Fields: []discordwebhook.Field{
+			{
+				Name:   "Country Rank",
+				Value:  p.Sprintf("%d", *stats.CountryRank),
+				Inline: true,
+			},
+			{
+				Name:   "Global Rank",
+				Value:  p.Sprintf("%d", *stats.GlobalRank),
+				Inline: true,
+			},
+			{
+				Name:   "PP",
+				Value:  fmt.Sprintf("%.2f", stats.PP),
+				Inline: true,
+			},
 		},
 	}
 
