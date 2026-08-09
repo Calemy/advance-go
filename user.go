@@ -431,7 +431,7 @@ func (u *UserExtended) UpdateBase() error {
 }
 
 func (u *UserExtended) Fetch(mode int) error {
-	body, err := Fetch(fmt.Sprintf("/users/%d?mode=%d", u.ID, mode))
+	body, err := Fetch(fmt.Sprintf("/users/%d/%s", u.ID, ModeStr(mode)))
 	if err != nil {
 		return err
 	}
